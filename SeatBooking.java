@@ -14,8 +14,10 @@ enum Seat {Seat1, Seat2, Seat3, Seat4, Seat5}
 sealed interface Event<EVENT extends Event<EVENT>> {
   record SeatBooked(Row row, Seat seat) implements Event<SeatBooked> {}
 
-  record Stored<EVENT extends Event<EVENT>>(UUID id, EVENT event, int version, LocalDateTime storedAt) implements Event<SeatBooked> {
-    Stored(EVENT event, int version) {
+  record Uncommitted<EVENT extends Event<EVENT>>(EVENT event, int version) {}
+
+  record Committed<EVENT extends Event<EVENT>>(UUID id, EVENT event, int version, LocalDateTime storedAt) implements Event<SeatBooked> {
+    Committed(EVENT event, int version) {
       this(UUID.randomUUID(), event, version, LocalDateTime.now());
     }
   }
@@ -25,70 +27,67 @@ sealed interface Command<COMMAND extends Command<COMMAND>> {
   record BookSeat(Row row, Seat seat) implements Command<BookSeat> {}
 }
 
-final Queue<Event.Stored<?>> events = new ArrayDeque<>();
+/**
+ * event-store
+ */
+final Queue<Event.Committed<?>> events = new ArrayDeque<>();
 
-List<Event.Stored<?>> loadEvents() {return events.stream().toList();}
+/**
+ * load current events list
+ * @return current events list
+ */
+List<Event.Committed<?>> loadEvents() {return events.stream().toList();}
 
-boolean alreadyBooked(List<Event.Stored<?>> events, Row brow, Seat bseat) {
+/**
+ * append an event to the event-store
+ * @param event event to append
+ * @return appended event
+ */
+<EVENT extends Event<EVENT>> Event.Committed<EVENT> appendEvent(Event.Uncommitted<EVENT> event) {
+  Event.Committed<EVENT> committed = new Event.Committed<>(event.event, event.version);
+  if (events.size() == committed.version)
+    events.add(committed);
+  else
+    throw new IllegalStateException(STR."Can't append uncommitted event, event \{event} not consistent with committed-events version \{events.size()}");
+  return committed;
+}
+
+boolean alreadyBooked(List<Event.Committed<?>> events, Row brow, Seat bseat) {
   return events.stream().anyMatch(stored -> switch (stored.event) {
     case Event.SeatBooked(var row, var seat) -> row == brow && seat == bseat;
     default -> false;
   });
 }
 
-boolean middleSeatIsOptional(List<Event.Stored<?>> events, Row brow) {
+boolean middleSeatIsOptional(List<Event.Committed<?>> events, Row row, Seat seat) {
+  if (seat == Seat.Seat1 || seat == Seat.Seat5) return true;
   return events.stream()
-    .filter(stored -> stored.event instanceof Event.SeatBooked(var row, _) && row == brow)
-    .noneMatch(stored -> stored.event instanceof Event.SeatBooked(_, var seat) && (seat == Seat.Seat2 || seat == Seat.Seat3 || seat == Seat.Seat4));
+    .filter(committed -> committed.event instanceof Event.SeatBooked(var row1, _) && row1 == row)
+    .noneMatch(committed -> committed.event instanceof Event.SeatBooked(_, var seat1) && (seat1 == Seat.Seat2 || seat1 == Seat.Seat3 || seat1 == Seat.Seat4));
 }
 
-int versionOf(List<Event.Stored<?>> events) {return events.size();}
-
-<EVENT extends Event<EVENT>> Event.Stored<EVENT> commitEvent(EVENT event) {
-  final int version = versionOf(loadEvents());
-  return switch (new Event.Stored<EVENT>(event, version)) {
-    case Event.Stored<EVENT> uncommitted when uncommitted.version == events.size() -> {
-      events.add(uncommitted);
-      yield uncommitted;
-    }
-    default -> throw new IllegalStateException(STR."Can't commit event, event \{event} with version \{version} not consistent with stored-events version \{events.size()}");
+<EVENT extends Event<EVENT>> Event.Committed<EVENT> commitEvent(Event.Uncommitted<EVENT> uncommitted) {
+  return switch (uncommitted) {
+    case Event.Uncommitted<EVENT>(_, var version) when version == events.size() -> appendEvent(uncommitted);
+    default -> throw new IllegalStateException(STR."Can't commit event, event \{uncommitted} with version \{uncommitted.version} not consistent with uncommitted-events version \{events.size()}");
   };
 }
 
-<EVENT extends Event<EVENT>> EVENT emitEvent(Event.Stored<EVENT> committed) {
+<EVENT extends Event<EVENT>> EVENT emitEvent(Event.Committed<EVENT> committed) {
   System.out.println(STR."Event \{committed} has been committed and emitted");
   return committed.event;
 }
 
-boolean claim(boolean condition, String otherwise) {
-  if (condition) return true;
-  throw new IllegalArgumentException(otherwise);
-}
-
-void intercept(Callable<Object> callable) {
-  try {
-    callable.call();
-  } catch (ExecutionException e) {
-    System.err.println(STR."\{e.getCause().getMessage()}");
-  } catch (Exception e) {
-    System.err.println(STR."\{e.getMessage()}");
-  }
-}
-
 @SuppressWarnings("unchecked")
-<EVENT extends Event<EVENT>> EVENT handleCommand(List<Event.Stored<?>> events, Command<?> command) {
+<EVENT extends Event<EVENT>> Event.Uncommitted<EVENT> handleCommand(List<Event.Committed<?>> events, Command<?> command) {
   return switch (command) {
     case Command.BookSeat(var row, var seat)
       when
       claim(!alreadyBooked(events, row, seat), STR."Can't book seat, command \{command} with already booked seats") &&
-      claim(middleSeatIsOptional(events, row, seat), STR."Can't book seat, command \{command} must book the middle seat") -> (EVENT) new Event.SeatBooked(row, seat);
+        claim(middleSeatIsOptional(events, row, seat), STR."Can't book seat, command \{command} must book the middle seat") -> new Event.Uncommitted<>((EVENT) new Event.SeatBooked(row, seat), events.size());
 
     default -> throw new IllegalArgumentException("Can't handle command");
   };
-}
-
-boolean middleSeatIsOptional(List<Event.Stored<?>> events, Row row, Seat seat) {
-  return seat == Seat.Seat1 || seat == Seat.Seat5 || middleSeatIsOptional(events, row);
 }
 
 void main() {
@@ -104,5 +103,20 @@ void main() {
     intercept(task2::get);
 
     intercept(() -> emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row2, Seat.Seat4)))));
+  }
+}
+
+boolean claim(boolean condition, String otherwise) {
+  if (condition) return true;
+  throw new IllegalArgumentException(otherwise);
+}
+
+void intercept(Callable<Object> callable) {
+  try {
+    callable.call();
+  } catch (ExecutionException e) {
+    System.err.println(STR."\{e.getCause().getMessage()}");
+  } catch (Exception e) {
+    System.err.println(STR."\{e.getMessage()}");
   }
 }
