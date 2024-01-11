@@ -30,13 +30,13 @@ sealed interface Command<COMMAND extends Command<COMMAND>> {
 /**
  * event-store
  */
-final Queue<Event.Committed<?>> events = new ArrayDeque<>();
+final Queue<Event.Committed<?>> eventStore = new ArrayDeque<>();
 
 /**
  * load current events list
  * @return current events list
  */
-List<Event.Committed<?>> loadEvents() {return events.stream().toList();}
+List<Event.Committed<?>> loadEvents() {return eventStore.stream().toList();}
 
 /**
  * append an event to the event-store
@@ -45,10 +45,10 @@ List<Event.Committed<?>> loadEvents() {return events.stream().toList();}
  */
 <EVENT extends Event<EVENT>> Event.Committed<EVENT> appendEvent(Event.Uncommitted<EVENT> event) {
   Event.Committed<EVENT> committed = new Event.Committed<>(event.event, event.version);
-  if (events.size() == committed.version)
-    events.add(committed);
+  if (eventStore.size() == committed.version)
+    eventStore.add(committed);
   else
-    throw new IllegalStateException(STR."Can't append uncommitted event, event \{event} not consistent with committed-events version \{events.size()}");
+    throw new IllegalStateException(STR."Can't append uncommitted event, event \{event} not consistent with committed-events version \{eventStore.size()}");
   return committed;
 }
 
@@ -68,8 +68,8 @@ boolean middleSeatIsOptional(List<Event.Committed<?>> events, Row row, Seat seat
 
 <EVENT extends Event<EVENT>> Event.Committed<EVENT> commitEvent(Event.Uncommitted<EVENT> uncommitted) {
   return switch (uncommitted) {
-    case Event.Uncommitted<EVENT>(_, var version) when version == events.size() -> appendEvent(uncommitted);
-    default -> throw new IllegalStateException(STR."Can't commit event, event \{uncommitted} with version \{uncommitted.version} not consistent with uncommitted-events version \{events.size()}");
+    case Event.Uncommitted<EVENT>(_, var version) when version == eventStore.size() -> appendEvent(uncommitted);
+    default -> throw new IllegalStateException(STR."Can't commit event, event \{uncommitted} with version \{uncommitted.version} not consistent with uncommitted-events version \{eventStore.size()}");
   };
 }
 
