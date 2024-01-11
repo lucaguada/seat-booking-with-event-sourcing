@@ -65,8 +65,8 @@ List<Event.Committed<?>> loadEvents() {return eventStore.stream().toList();}
  * @param bseat  booking seat
  * @return true when row and seat are already booked false otherwise
  */
-boolean notAlreadyBooked(List<Event.Committed<?>> events, Row brow, Seat bseat) {
-  return events.stream().noneMatch(stored -> switch (stored.event) {
+boolean alreadyBooked(List<Event.Committed<?>> events, Row brow, Seat bseat) {
+  return events.stream().anyMatch(stored -> switch (stored.event) {
     case Event.SeatBooked(var row, var seat, _) -> row == brow && seat == bseat;
     default -> false;
   });
@@ -78,12 +78,12 @@ boolean notAlreadyBooked(List<Event.Committed<?>> events, Row brow, Seat bseat) 
  * @param events loaded committed-events
  * @param brow   booking row
  * @param bseat  booking seat
- * @return true when the middle-seat is optional, false otherwise
+ * @return true when the middle-seat is mandatory, false otherwise
  */
-boolean middleSeatIsOptional(List<Event.Committed<?>> events, Row brow, Seat bseat) {
-  return bseat == Seat.Seat1 || bseat == Seat.Seat5 || events.stream()
+boolean middleSeatMandatory(List<Event.Committed<?>> events, Row brow, Seat bseat) {
+  return bseat != Seat.Seat1 && bseat != Seat.Seat5 && events.stream()
     .filter(committed -> committed.event instanceof Event.SeatBooked(var row, _, _) && row == brow)
-    .noneMatch(committed -> committed.event instanceof Event.SeatBooked(_, var seat, _) && (seat == Seat.Seat2 || seat == Seat.Seat4));
+    .anyMatch(committed -> committed.event instanceof Event.SeatBooked(_, var seat, _) && (seat == Seat.Seat2 || seat == Seat.Seat4));
 }
 
 /**
@@ -108,8 +108,8 @@ boolean middleSeatIsOptional(List<Event.Committed<?>> events, Row brow, Seat bse
 <EVENT extends Event<EVENT>> Event.Uncommitted<EVENT> handleCommand(List<Event.Committed<?>> events, Command<?> command) {
   return switch (command) {
     case Command.BookSeat(var row, var seat, var user)
-      when claim(notAlreadyBooked(events, row, seat), STR."Can't book seat, command \{command} with already booked seats")
-      && claim(middleSeatIsOptional(events, row, seat), STR."Can't book seat, command \{command} must book the middle seat") ->
+      when isNot(alreadyBooked(events, row, seat), STR."Can't book seat, command \{command} with already booked seats")
+      && isNot(middleSeatMandatory(events, row, seat), STR."Can't book seat, command \{command} must book the middle seat") ->
       new Event.Uncommitted<>((EVENT) new Event.SeatBooked(row, seat, user), events.size());
 
     default -> throw new IllegalArgumentException("Can't handle command");
@@ -132,9 +132,9 @@ void main() {
   }
 }
 
-boolean claim(boolean condition, String otherwise) {
-  if (condition) return true;
-  throw new IllegalArgumentException(otherwise);
+boolean isNot(boolean condition, String otherwise) {
+  if (condition) throw new IllegalArgumentException(otherwise);
+  return true;
 }
 
 void intercept(Callable<Object> callable) {
