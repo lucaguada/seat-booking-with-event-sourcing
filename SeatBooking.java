@@ -3,6 +3,7 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 
@@ -35,44 +36,73 @@ boolean alreadyBooked(List<Event.Stored<?>> events, Row brow, Seat bseat) {
   });
 }
 
+boolean middleSeatIsOptional(List<Event.Stored<?>> events, Row brow) {
+  return events.stream()
+    .filter(stored -> stored.event instanceof Event.SeatBooked(var row, _) && row == brow)
+    .noneMatch(stored -> stored.event instanceof Event.SeatBooked(_, var seat) && (seat == Seat.Seat2 || seat == Seat.Seat3 || seat == Seat.Seat4));
+}
+
 int versionOf(List<Event.Stored<?>> events) {return events.size();}
 
 <EVENT extends Event<EVENT>> Event.Stored<EVENT> commitEvent(EVENT event) {
-  return switch (new Event.Stored<EVENT>(event, versionOf(loadEvents()))) {
+  final int version = versionOf(loadEvents());
+  return switch (new Event.Stored<EVENT>(event, version)) {
     case Event.Stored<EVENT> uncommitted when uncommitted.version == events.size() -> {
       events.add(uncommitted);
       yield uncommitted;
     }
-    default -> throw new IllegalStateException(STR."Can't commit event, event not consistent with version \{event}");
+    default -> throw new IllegalStateException(STR."Can't commit event, event \{event} with version \{version} not consistent with stored-events version \{events.size()}");
   };
 }
 
-<EVENT extends Event<EVENT>> void emitEvent(Event.Stored<EVENT> committed) {
+<EVENT extends Event<EVENT>> EVENT emitEvent(Event.Stored<EVENT> committed) {
   System.out.println(STR."Event \{committed} has been committed and emitted");
+  return committed.event;
+}
+
+boolean claim(boolean condition, String otherwise) {
+  if (condition) return true;
+  throw new IllegalArgumentException(otherwise);
+}
+
+void intercept(Callable<Object> callable) {
+  try {
+    callable.call();
+  } catch (ExecutionException e) {
+    System.err.println(STR."\{e.getCause().getMessage()}");
+  } catch (Exception e) {
+    System.err.println(STR."\{e.getMessage()}");
+  }
 }
 
 @SuppressWarnings("unchecked")
 <EVENT extends Event<EVENT>> EVENT handleCommand(List<Event.Stored<?>> events, Command<?> command) {
   return switch (command) {
-    case Command.BookSeat(var row, var seat) when !alreadyBooked(events, row, seat) -> (EVENT) new Event.SeatBooked(row, seat);
-    default -> throw new IllegalArgumentException(STR."Can't book seat, command \{command} has already booked seats");
+    case Command.BookSeat(var row, var seat)
+      when
+      claim(!alreadyBooked(events, row, seat), STR."Can't book seat, command \{command} with already booked seats") &&
+      claim(middleSeatIsOptional(events, row, seat), STR."Can't book seat, command \{command} must book the middle seat") -> (EVENT) new Event.SeatBooked(row, seat);
+
+    default -> throw new IllegalArgumentException("Can't handle command");
   };
 }
 
-void main() {
-  emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row1, Seat.Seat2))));
-  emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row1, Seat.Seat1))));
+boolean middleSeatIsOptional(List<Event.Stored<?>> events, Row row, Seat seat) {
+  return seat == Seat.Seat1 || seat == Seat.Seat5 || middleSeatIsOptional(events, row);
+}
 
+void main() {
   try (final var tasks = Executors.newVirtualThreadPerTaskExecutor()) {
+    intercept(() -> emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row1, Seat.Seat2)))));
+    intercept(() -> emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row1, Seat.Seat1)))));
+    intercept(() -> emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row1, Seat.Seat2)))));
+
     var task1 = tasks.submit(() -> emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row2, Seat.Seat2)))));
     var task2 = tasks.submit(() -> emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row2, Seat.Seat2)))));
 
-    task1.get();
-    task2.get();
-  } catch (ExecutionException | InterruptedException e) {
-    System.err.println(STR."\{e.getMessage()}");
+    intercept(task1::get);
+    intercept(task2::get);
+
+    intercept(() -> emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row2, Seat.Seat4)))));
   }
-
-  emitEvent(commitEvent(this.<Event.SeatBooked>handleCommand(loadEvents(), new Command.BookSeat(Row.Row1, Seat.Seat1))));
-
 }
