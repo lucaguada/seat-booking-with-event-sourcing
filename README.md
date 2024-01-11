@@ -44,18 +44,36 @@ java --source 21 --enable-preview SeatBooking.java
 
 ### Execution:
 
-1. command handled: `BookSeat(row = Row1, seat = Seat2)`
-2. command handled: `BookSeat(row = Row1, seat = Seat1)`
-3. command handled: `BookSeat(row = Row1, seat = Seat2)`
-4. async. command handled: `BookSeat(row = Row2, seat = Seat2)` -> version may be inconsistent because of (5)
-5. async. command handled: `BookSeat(row = Row2, seat = Seat2)` -> version may be inconsistent because of (4)
-6. command handled: `BookSeat(row = Row1, seat = Seat1)`
+1. command handled: `BookSeat(row = Row1, seat = Seat2, user = Merlin)`
+2. command handled: `BookSeat(row = Row1, seat = Seat1, user = Wart)`
+3. command handled: `BookSeat(row = Row1, seat = Seat2, user = Merlin)`
+4. async. command handled: `BookSeat(row = Row2, seat = Seat2, user = Wart)` -> version may be inconsistent because of (5)
+5. async. command handled: `BookSeat(row = Row2, seat = Seat2, user = Merlin)` -> version may be inconsistent because of (4)
+6. command handled: `BookSeat(row = Row1, seat = Seat1, user = Wart)`
 
 ```
-1 -> Event Stored[id=af5959ba-b5a3-4ad8-a685-fb71415eff2d, event=SeatBooked[row=Row1, seat=Seat2], version=0, storedAt=2024-01-11T16:49:53.625928904] has been committed and emitted
-2 -> Event Stored[id=3c463597-7b2b-4057-aea0-ff6da683b904, event=SeatBooked[row=Row1, seat=Seat1], version=1, storedAt=2024-01-11T16:49:53.638233610] has been committed and emitted
-4 -> Event Stored[id=81395001-7caf-44c2-a426-2e0730e66fde, event=SeatBooked[row=Row2, seat=Seat2], version=2, storedAt=2024-01-11T16:49:53.644297054] has been committed and emitted
-3 -> Can't book seat, command BookSeat[row=Row1, seat=Seat2] with already booked seats
-5 -> Can't commit event, event SeatBooked[row=Row2, seat=Seat2] with version 2 not consistent with stored-events version 3
-6 -> Can't book seat, command BookSeat[row=Row2, seat=Seat4] must book the middle seat
+1 -> Event Committed[id=de54786e-ad50-424c-8001-44cd36f9eb06, event=SeatBooked[row=Row1, seat=Seat2, user=Merlin], version=0, storedAt=2024-01-11T20:44:31.028653718] has been committed and emitted
+2 -> Event Committed[id=f2994b63-2306-4c94-9cd1-16cba223d1d7, event=SeatBooked[row=Row1, seat=Seat1, user=Wart], version=1, storedAt=2024-01-11T20:44:31.039795412] has been committed and emitted
+5 -> Event Committed[id=ea6c431a-4704-45eb-9bb2-eb63cdfcb9a2, event=SeatBooked[row=Row2, seat=Seat2, user=Merlin], version=2, storedAt=2024-01-11T20:44:31.045232365] has been committed and emitted
+3 -> Can't book seat, command BookSeat[row=Row1, seat=Seat2, user=Merlin] with already booked seats
+4 -> Can't commit event, event Uncommitted[event=SeatBooked[row=Row2, seat=Seat2, user=Wart], version=2] not consistent with version in event-store: 3
+6 -> Can't book seat, command BookSeat[row=Row2, seat=Seat4, user=Wart] must book the middle seat
 ```
+#### Summary:
+
+In `case 1.` there's no issue Merlin can book seat 2 on row 1; the event-store version is 0.<br>
+In `case 2.` there's no issue Merlin can book seat 2 on row 1; the event-store version is 1.
+
+As you can see from the output, instead of printing the error message thrown by `case 3.`, the result for `case 5.` is printed (because of virtual threads).<br>
+In `case 4.` and `case 5.` there's a concurrency issue Merlin (`case 5.`) could book seat 2 on row 2, although Wart (`case 4.`) tried to book the same seat before Merlin.
+
+In `case 3.` Merlin can't book the seat, since Wart already booked the same seat.<br>
+In `case 6.` Wart can't book seat 4 on row 2, since a sided seat from the middle is already booked, therefore must book the middle seat. 
+
+#### Keep in mind:
+
+`case 4.` and `case 5.` are exchangeable due to the asynchronous nature of virtual threads, therefore try to run the example multiple times to see it happen.
+
+The **optimistic lock** is implemented as a show-of-concept and most of the time works as-is, but you might face the casual and rare case where `case 4.` and `case 5.` are both valid.   
+
+
