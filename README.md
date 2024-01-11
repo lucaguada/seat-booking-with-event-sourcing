@@ -62,9 +62,10 @@ java --source 21 --enable-preview SeatBooking.java
 #### Summary:
 
 In `case 1.` there's no issue Merlin can book seat 2 on row 1; the event-store version is 0.<br>
-In `case 2.` there's no issue Wart can book seat 2 on row 1; the event-store version is 1.
+In `case 2.` there's no issue Wart can book seat 1 on row 1; the event-store version is 1.
 
 As you can see from the output, instead of printing the error message thrown by `case 3.`, the result for `case 5.` is printed (because of virtual threads).<br>
+In `case 5.` Merlis could book seat 2 on row 2; the event-store version is 2.<br>
 In `case 4.` and `case 5.` there's a concurrency issue Merlin (`case 5.`) could book seat 2 on row 2, although Wart (`case 4.`) tried to book the same seat before Merlin.
 
 In `case 3.` Merlin can't book the seat, since Wart already booked the same seat.<br>
